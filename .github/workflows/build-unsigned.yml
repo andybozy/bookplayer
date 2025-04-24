@@ -58,15 +58,19 @@ jobs:
             clean archive | xcpretty
 
       # Package into IPA
-      - name: Zip IPA
+      - name: Package IPA
         run: |
+          set -euo pipefail
           mkdir -p Payload
           cp -R build/BookPlayer.xcarchive/Products/Applications/BookPlayer.app Payload/
-          (cd Payload && zip -r ../BookPlayer-unsigned.ipa .)
+          # keepParent ensures Payload/ is top-level inside the IPA
+          ditto -c -k --keepParent Payload BookPlayer-unsigned.ipa
+          unzip -l BookPlayer-unsigned.ipa | head -n 5   # sanity check
 
-      # Upload artifact
+      # 8 ▸ Upload artifact
       - uses: actions/upload-artifact@v4
         with:
-          name: BookPlayer-unsigned
+          name: BookPlayer-unsigned.ipa
           path: BookPlayer-unsigned.ipa
           if-no-files-found: error
+          retention-days: 30
