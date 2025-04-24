@@ -1,0 +1,85 @@
+name: Build-Unsigned-BookPlayer-IPA
+
+on:
+  workflow_dispatch:            # run manually only
+
+jobs:
+  ipa:
+    runs-on: macos-15           # macOS Sonoma runner with Xcode 16
+    timeout-minutes: 40
+
+    steps:
+    # ──────────────────────────────────────────────
+    # 1 ▸ Check out repository
+    # ──────────────────────────────────────────────
+    - uses: actions/checkout@v4
+
+    # ──────────────────────────────────────────────
+    # 2 ▸ Free space (optional but speeds builds)
+    # ──────────────────────────────────────────────
+    - name: Remove unused Xcode versions
+      run: |
+        sudo rm -rf /Applications/Xcode_14*.app
+        sudo rm -rf /Applications/Xcode_15*.app
+
+    # ──────────────────────────────────────────────
+    # 3 ▸ Select Xcode 16
+    # ──────────────────────────────────────────────
+    - name: Select Xcode 16.0
+      run: sudo xcode-select -s "/Applications/Xcode_16.app/Contents/Developer"
+
+    # ──────────────────────────────────────────────
+    # 4 ▸ BookPlayer-specific config file
+    # ──────────────────────────────────────────────
+    - name: Create Debug.xcconfig
+      run: |
+        cp BuildConfiguration/Debug.template.xcconfig BuildConfiguration/Debug.xcconfig
+
+    # ──────────────────────────────────────────────
+    # 5 ▸ Resolve Swift-PM packages
+    # ──────────────────────────────────────────────
+    - name: Resolve SwiftPM dependencies
+      run: xcodebuild -resolvePackageDependencies -project BookPlayer.xcodeproj
+
+    # ──────────────────────────────────────────────
+    # 6 ▸ Build unsigned .xcarchive (no signing)
+    # ──────────────────────────────────────────────
+    - name: Archive (unsigned)
+      run: |
+        set -euo pipefail
+        xcodebuild \
+          -project BookPlayer.xcodeproj \
+          -scheme BookPlayer \
+          -configuration Release \
+          -destination 'generic/platform=iOS' \
+          -archivePath "$PWD/build/BookPlayer.xcarchive" \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          clean archive | xcpretty
+        echo "** ARCHIVE SUCCEEDED **"
+
+    # ──────────────────────────────────────────────
+    # 7 ▸ Ad-hoc sign & package IPA
+    # ──────────────────────────────────────────────
+    - name: Package unsigned IPA
+      run: |
+        set -euo pipefail
+        # a) prepare Payload
+        mkdir -p Payload
+        cp -R build/BookPlayer.xcarchive/Products/Applications/BookPlayer.app Payload/
+        # b) add ad-hoc signature so AltStore/Sideloadly can re-sign
+        /usr/bin/codesign --force --sign - --timestamp=none --deep Payload/BookPlayer.app
+        # c) zip, keeping the Payload folder at root
+        ditto -c -k --keepParent Payload BookPlayer-unsigned.ipa
+        unzip -l BookPlayer-unsigned.ipa | head -n 5
+
+    # ──────────────────────────────────────────────
+    # 8 ▸ Upload artifact
+    # ──────────────────────────────────────────────
+    - uses: actions/upload-artifact@v4
+      with:
+        name: BookPlayer-unsigned.ipa
+        path: BookPlayer-unsigned.ipa
+        if-no-files-found: error
+        retention-days: 30
