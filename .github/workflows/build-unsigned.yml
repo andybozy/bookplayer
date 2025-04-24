@@ -1,45 +1,72 @@
-name: Build-Unsigned-BookPlayer-IPA
+name: CI
 
 on:
   workflow_dispatch:    # manual only
 
 jobs:
-  build-ipa:
-    runs-on: macos-14   # Sonoma runner – includes Xcode 15.3
-    timeout-minutes: 30
+  build:
+    # https://github.com/actions/runner-images/tree/main/images/macos
+    runs-on: macos-15
 
     steps:
-    # 1. Check out source
     - uses: actions/checkout@v4
-
-    # 2. Resolve Swift-PM packages (RevenueCat, etc.)
-    - name: Resolve SPM
-      run: xcodebuild -resolvePackageDependencies -project BookPlayer.xcodeproj
-
-    # 3. Archive WITHOUT signing
-    - name: Build xcarchive (no signing)
+    # We only use Xcode 16.0
+    - name: Remove unused applications
       run: |
-        xcodebuild \
-          -project BookPlayer.xcodeproj \
-          -scheme develop \
-          -configuration Release \
-          -destination 'generic/platform=iOS' \
-          -archivePath $PWD/build/BookPlayer.xcarchive \
-          CODE_SIGN_IDENTITY="" \
-          CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGNING_ALLOWED=NO \
-          clean archive | xcpretty
+        df -hI /dev/disk3s1s1
+        sudo rm -rf /Applications/Xcode_14.3.1.app
+        sudo rm -rf /Applications/Xcode_15.0.1.app
+        sudo rm -rf /Applications/Xcode_15.1.app
+        sudo rm -rf /Applications/Xcode_15.2.app
+        sudo rm -rf /Applications/Xcode_15.3.app
+        df -hI /dev/disk3s1s1
+    - name: Create Debug.xcconfig
+      run: cp ./BuildConfiguration/Debug.template.xcconfig ./BuildConfiguration/Debug.xcconfig
+    - name: Set Xcode version
+      run: sudo xcode-select -s "/Applications/Xcode_16.app/Contents/Developer"
+    - name: Resolve dependencies
+      run: xcodebuild -resolvePackageDependencies
+    - name: Build and Run tests
+      run: xcodebuild -scheme BookPlayer test -testPlan Unit\ Tests -destination 'platform=iOS Simulator,name=iPhone 16,OS=18.0'
+ipa:
+    runs-on: macos-15
+    needs: build            # run this job only if tests pass
+    steps:
+      - uses: actions/checkout@v4
 
-    # 4. Package .app into an unsigned IPA
-    - name: Package IPA
-      run: |
-        mkdir -p Payload
-        cp -R build/BookPlayer.xcarchive/Products/Applications/BookPlayer.app Payload/
-        (cd Payload && zip -r ../BookPlayer-unsigned.ipa .)
-        echo "::notice ::Unsigned IPA size: $(du -h BookPlayer-unsigned.ipa | cut -f1)"
+      # Select Xcode 16 (same as in test job)
+      - name: Select Xcode 16.0
+        run: sudo xcode-select -s "/Applications/Xcode_16.app/Contents/Developer"
 
-    # 5. Upload artifact
-    - uses: actions/upload-artifact@v4
-      with:
-        name: BookPlayer-unsigned
-        path: BookPlayer-unsigned.ipa
+      # Resolve Swift-PM packages
+      - name: Resolve dependencies
+        run: xcodebuild -resolvePackageDependencies -project BookPlayer.xcodeproj
+
+      # Build unsigned .xcarchive
+      - name: Archive unsigned
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project BookPlayer.xcodeproj \
+            -scheme BookPlayer \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath $PWD/build/BookPlayer.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean archive | xcpretty
+
+      # Package into IPA
+      - name: Zip IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/BookPlayer.xcarchive/Products/Applications/BookPlayer.app Payload/
+          (cd Payload && zip -r ../BookPlayer-unsigned.ipa .)
+
+      # Upload artifact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BookPlayer-unsigned
+          path: BookPlayer-unsigned.ipa
+          if-no-files-found: error
