@@ -1,8 +1,7 @@
 name: Build-Unsigned-BookPlayer-IPA
 
 on:
-  push:            # build every push to any branch
-  workflow_dispatch:
+  workflow_dispatch:    # manual only
 
 jobs:
   build-ipa:
