@@ -1,4 +1,4 @@
-name: CI
+name: CI-new
 
 on:
   workflow_dispatch:    # manual only
