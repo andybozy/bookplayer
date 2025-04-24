@@ -1,0 +1,46 @@
+name: Build-Unsigned-BookPlayer-IPA
+
+on:
+  push:            # build every push to any branch
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-14   # Sonoma runner – includes Xcode 15.3
+    timeout-minutes: 30
+
+    steps:
+    # 1. Check out source
+    - uses: actions/checkout@v4
+
+    # 2. Resolve Swift-PM packages (RevenueCat, etc.)
+    - name: Resolve SPM
+      run: xcodebuild -resolvePackageDependencies -project BookPlayer.xcodeproj
+
+    # 3. Archive WITHOUT signing
+    - name: Build xcarchive (no signing)
+      run: |
+        xcodebuild \
+          -project BookPlayer.xcodeproj \
+          -scheme develop \
+          -configuration Release \
+          -destination 'generic/platform=iOS' \
+          -archivePath $PWD/build/BookPlayer.xcarchive \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          clean archive | xcpretty
+
+    # 4. Package .app into an unsigned IPA
+    - name: Package IPA
+      run: |
+        mkdir -p Payload
+        cp -R build/BookPlayer.xcarchive/Products/Applications/BookPlayer.app Payload/
+        (cd Payload && zip -r ../BookPlayer-unsigned.ipa .)
+        echo "::notice ::Unsigned IPA size: $(du -h BookPlayer-unsigned.ipa | cut -f1)"
+
+    # 5. Upload artifact
+    - uses: actions/upload-artifact@v4
+      with:
+        name: BookPlayer-unsigned
+        path: BookPlayer-unsigned.ipa
