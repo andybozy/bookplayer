@@ -1,0 +1,133 @@
+# ========================================================================
+#  BookPlayer • Unsigned IPA Builder
+#  ——————————————————————————————————
+#  • Manual trigger (workflow-dispatch)
+#  • Single macOS-15 runner with Xcode 16
+#  • Builds an *unsigned* IPA, pads every binary with an ad-hoc signature
+#    so AltStore / Sideloadly can re-sign it safely.
+#  • Optionally uploads artifact and/or creates a draft GitHub release
+# ========================================================================
+
+name: Build-Unsigned-BookPlayer
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: "Upload BookPlayer-unsigned.ipa as a workflow artifact"
+        required: false
+        default: true
+        type: boolean
+      create_release:
+        description: "Create a draft GitHub release that contains the IPA"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build IPA
+    runs-on: macos-15
+    permissions:
+      contents: write      # needed only if create_release = true
+    timeout-minutes: 45
+
+    steps:
+    # ─────────────────────────────────────────────────────────
+    # 1 ▸ Checkout repo
+    # ─────────────────────────────────────────────────────────
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # ─────────────────────────────────────────────────────────
+    # 2 ▸ Free disk by deleting unused Xcode bundles (optional)
+    # ─────────────────────────────────────────────────────────
+    - name: Remove older Xcodes
+      run: |
+        sudo rm -rf /Applications/Xcode_14*.app
+        sudo rm -rf /Applications/Xcode_15*.app
+
+    # ─────────────────────────────────────────────────────────
+    # 3 ▸ Select Xcode 16
+    # ─────────────────────────────────────────────────────────
+    - name: Select Xcode 16
+      run: sudo xcode-select -s "/Applications/Xcode_16.app/Contents/Developer"
+
+    # ─────────────────────────────────────────────────────────
+    # 4 ▸ BookPlayer-specific xcconfig needed for Release build
+    # ─────────────────────────────────────────────────────────
+    - name: Create Debug.xcconfig
+      run: cp BuildConfiguration/Debug.template.xcconfig BuildConfiguration/Debug.xcconfig
+
+    # ─────────────────────────────────────────────────────────
+    # 5 ▸ Resolve Swift-PM packages
+    # ─────────────────────────────────────────────────────────
+    - name: Resolve SwiftPM packages
+      run: xcodebuild -resolvePackageDependencies -project BookPlayer.xcodeproj
+
+    # ─────────────────────────────────────────────────────────
+    # 6 ▸ Build unsigned archive (no signing flags)
+    # ─────────────────────────────────────────────────────────
+    - name: Archive (unsigned)
+      run: |
+        set -euo pipefail
+        xcodebuild \
+          -project BookPlayer.xcodeproj \
+          -scheme BookPlayer \
+          -configuration Release \
+          -destination 'generic/platform=iOS' \
+          -archivePath "$PWD/build/BookPlayer.xcarchive" \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          clean archive | xcpretty
+
+    # ─────────────────────────────────────────────────────────
+    # 7 ▸ Pad every executable with ad-hoc signature, zip IPA
+    # ─────────────────────────────────────────────────────────
+    - name: Package IPA
+      run: |
+        set -euo pipefail
+
+        # a) Prepare Payload directory
+        mkdir -p Payload
+        cp -R build/BookPlayer.xcarchive/Products/Applications/BookPlayer.app Payload/
+
+        # b) Add ad-hoc signature (recursively) to *every* binary
+        /usr/bin/codesign --force --sign - --timestamp=none --deep Payload/BookPlayer.app
+
+        # c) Zip, preserving Payload folder at root
+        ditto -c -k --keepParent Payload BookPlayer-unsigned.ipa
+
+        # d) Show first few entries to confirm structure
+        unzip -l BookPlayer-unsigned.ipa | head -n 5
+
+    # ─────────────────────────────────────────────────────────
+    # 8 ▸ Upload artifact (optional)
+    # ─────────────────────────────────────────────────────────
+    - name: Upload IPA artifact
+      if: ${{ inputs.upload_artifact }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: BookPlayer-unsigned.ipa
+        path: BookPlayer-unsigned.ipa
+        if-no-files-found: error
+        retention-days: 30
+
+    # ─────────────────────────────────────────────────────────
+    # 9 ▸ Draft GitHub release (optional)
+    # ─────────────────────────────────────────────────────────
+    - name: Create draft release
+      if: ${{ inputs.create_release }}
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        draft: true
+        tag_name: "unsigned-build-${{ github.run_number }}"
+        name: "Unsigned build ${{ github.run_number }}"
+        files: BookPlayer-unsigned.ipa
