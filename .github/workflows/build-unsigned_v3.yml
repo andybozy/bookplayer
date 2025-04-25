@@ -8,7 +8,7 @@
 #  • Optionally uploads artifact and/or creates a draft GitHub release
 # ========================================================================
 
-name: Build-Unsigned-BookPlayer
+name: Build-Unsigned-BookPlayer v3
 
 on:
   workflow_dispatch:
